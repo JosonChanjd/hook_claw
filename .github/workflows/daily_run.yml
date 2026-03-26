@@ -38,8 +38,8 @@ jobs:
           # 运行脚本，即使报错也不会中断后续步骤
           python SAT_1Y.py || true
           
-          # 这次真的加上空格了！！
-          if[ -f "feishu_msg_1.txt" ]; then
+          # 【这里必须是 if 空格 [ 】
+          if [ -f "feishu_msg_1.txt" ]; then
             MSG1=$(cat feishu_msg_1.txt)
           else
             MSG1="❌ 脚本 SAT_1Y.py 未能正常运行，未生成报告文本。"
@@ -54,7 +54,7 @@ jobs:
         run: |
           python SAT.py || true
           
-          # 这里也是正确带有空格的格式
+          # 【这里必须是 if 空格[ 】
           if [ -f "feishu_msg_2.txt" ]; then
             MSG2=$(cat feishu_msg_2.txt)
           else
@@ -68,8 +68,8 @@ jobs:
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          # 这里的空格也补上了
-          if[ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
+          # 【这里必须是 if 空格 [ 】
+          if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
             echo "::error::未配置 FEISHU_WEBHOOK，请在 GitHub Settings 添加！"
             exit 1
           fi
