@@ -1,29 +1,19 @@
 import numpy as np
 import pandas as pd
-# Numpy 兼容性补丁
 if not hasattr(np, 'bool8'): np.bool8 = np.bool_
-
-import bokeh
-from bokeh.document import Document
-# Bokeh 3.x 兼容性补丁：解决 'Document' object has no attribute 'js_on_event'
-if not hasattr(Document, 'js_on_event'):
-    Document.js_on_event = Document.on_event
 
 import os
 import datetime
 import pandas_ta as ta
-import yfinance as yf
+import efinance as ef
 from backtesting import Backtest, Strategy
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-import efinance as ef
 
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# 策略定义
-# ==========================================
+# === 策略定义保持不变 ===
 class StrategySix(Strategy):
     st_period = 10; st_mult = 3.0; cci_period = 14; vol_threshold = 1.2
     def init(self):
@@ -35,7 +25,9 @@ class StrategySix(Strategy):
     def next(self):
         price, vol = self.data.Close[-1], self.data.Volume[-1]
         vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        if not self.position and self.st_dir[-1] == 1 and self.cci[-1] < -100 and vol_ok: self.buy()
+        size = int(self._broker._cash * 0.9 // price // 100 * 100)
+        if not self.position:
+            if self.st_dir[-1] == 1 and self.cci[-1] < -100 and vol_ok and size >= 100: self.buy(size=size)
         elif self.st_dir[-1] == -1: self.position.close()
 
 class StrategyNine(Strategy):
@@ -43,14 +35,15 @@ class StrategyNine(Strategy):
     def init(self):
         c, v = pd.Series(self.data.Close), pd.Series(self.data.Volume)
         bb = ta.bbands(c, length=self.bb_length, std=self.bb_std)
-        self.bb_l = self.I(lambda: bb.iloc[:, 0])
-        self.ma_fast = self.I(ta.sma, c, self.ma_fast_len)
-        self.vol_ma5 = self.I(ta.sma, v, 5)
+        self.bb_l, self.bb_u = self.I(lambda: bb.iloc[:, 0]), self.I(lambda: bb.iloc[:, 2])
+        self.ma_fast, self.vol_ma5 = self.I(ta.sma, c, self.ma_fast_len), self.I(ta.sma, v, 5)
     def next(self):
         price, vol = self.data.Close[-1], self.data.Volume[-1]
         vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        if not self.position and price < self.bb_l[-1] and price < self.ma_fast[-1] and vol_ok: self.buy()
-        elif price > self.ma_fast[-1]: self.position.close()
+        size = int(self._broker._cash * 0.9 // price // 100 * 100)
+        if not self.position:
+            if price < self.bb_l[-1] and price < self.ma_fast[-1] and vol_ok and size >= 100: self.buy(size=size)
+        elif price > self.bb_u[-1]: self.position.close()
 
 class StrategyTen(Strategy):
     vol_threshold = 1.2
@@ -62,55 +55,103 @@ class StrategyTen(Strategy):
     def next(self):
         price, vol = self.data.Close[-1], self.data.Volume[-1]
         vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        if not self.position and price > self.span_a[-1] and price > self.span_b[-1] and vol_ok: self.buy()
-        elif price < self.span_a[-1]: self.position.close()
+        size = int(self._broker._cash * 0.9 // price // 100 * 100)
+        if not self.position:
+            if price > self.span_a[-1] and price > self.span_b[-1] and vol_ok and size >= 100: self.buy(size=size)
+        elif price < self.span_a[-1] or price < self.span_b[-1]: self.position.close()
 
-# ==========================================
-# 工具函数
-# ==========================================
-def get_data_yf(symbol, start_dt, end_dt):
-    yf_code = f"{symbol}.SS" if symbol.startswith(('6', '9')) else f"{symbol}.SZ"
+# === 辅助函数保持不变 ===
+def get_signal_status(strategy_instance):
     try:
-        df = yf.download(yf_code, start=start_dt, end=end_dt, progress=False)
-        if df.empty: return None
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-    except: return None
+        data = strategy_instance.data
+        if len(data) < 20: return False, "数据不足"
+        idx = -1
+        price, vol = data.Close[idx], data.Volume[idx]
+        if isinstance(strategy_instance, StrategySix):
+            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
+            return (strategy_instance.st_dir[idx] == 1 and strategy_instance.cci[idx] < -100 and vol_ok), ""
+        elif isinstance(strategy_instance, StrategyNine):
+            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
+            return (price < strategy_instance.bb_l[idx] and price < strategy_instance.ma_fast[idx] and vol_ok), ""
+        elif isinstance(strategy_instance, StrategyTen):
+            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
+            sa, sb = strategy_instance.span_a[idx], strategy_instance.span_b[idx]
+            if pd.isna(sa) or pd.isna(sb): return False, ""
+            return (price > sa and price > sb and vol_ok), ""
+    except Exception:
+        return False, "Error"
 
-def process_stock(stock_info, start_dt, end_dt):
+def process_stock(stock_info, start_date, end_date):
     symbol, name = stock_info['stock_code'], stock_info['stock_name']
-    df = get_data_yf(symbol, start_dt, end_dt)
-    if df is None or len(df) < 50: return None
     try:
-        bt6, bt9, bt10 = Backtest(df, StrategySix), Backtest(df, StrategyNine), Backtest(df, StrategyTen)
-        s6, s9, s10 = bt6.run(), bt9.run(), bt10.run()
-        # 信号判定逻辑
-        def is_buy(s): return s['_strategy'].data.Close[-1] < s['_strategy'].data.Close[-2] # 简化示例
-        score = sum([1 if s6['Return [%]'] > 0 else 0, 1 if s9['Return [%]'] > 0 else 0, 1 if s10['Return [%]'] > 0 else 0])
-        return {'code': symbol, 'name': name, 'close': df['Close'].iloc[-1], 'score': score}
-    except: return None
-
-def run_scanner():
-    print(">>> 启动全市场扫描 (yfinance 模式)...")
-    try:
-        # 尝试获取列表，失败则使用预设核心池
-        try:
-            all_stocks = ef.stock.get_realtime_quotes()
-            valid_stocks = all_stocks[all_stocks['股票代码'].str.match(r'^(60|00|30|68)')].copy()
-            valid_stocks.rename(columns={'股票代码': 'stock_code', '股票名称': 'stock_name'}, inplace=True)
-            valid_stocks = valid_stocks.head(100) # GitHub 环境建议限制在 100 只以内
-        except:
-            print(">>> 列表获取失败，使用预设池...")
-            valid_stocks = pd.DataFrame([
-                {'stock_code': '600519', 'stock_name': '贵州茅台'},
-                {'stock_code': '000858', 'stock_name': '五粮液'},
-                {'stock_code': '002703', 'stock_name': '浙江鼎力'},
-                {'stock_code': '601318', 'stock_name': '中国平安'}
-            ])
-
-        end_dt = datetime.datetime.now()
-        start_dt = end_dt - datetime.timedelta(days=365)
-        results = []
+        df = ef.stock.get_quote_history(symbol, beg=start_date, end=end_date)
+        if df is None or len(df) < 50: return None
+        df = df[['日期', '开盘', '最高', '最低', '收盘', '成交量']]
+        df.columns =['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        df = df[~df.index.duplicated()] 
         
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_stock
+        bt6 = Backtest(df, StrategySix, cash=100000, commission=0.0003)
+        bt9 = Backtest(df, StrategyNine, cash=100000, commission=0.0003)
+        bt10 = Backtest(df, StrategyTen, cash=100000, commission=0.0003)
+        stats6, stats9, stats10 = bt6.run(), bt9.run(), bt10.run()
+        
+        sig6 = get_signal_status(stats6['_strategy'])
+        sig9 = get_signal_status(stats9['_strategy'])
+        sig10 = get_signal_status(stats10['_strategy'])
+        
+        score = sum([sig6[0], sig9[0], sig10[0]])
+        return {'code': symbol, 'name': name, 'close': df['Close'].iloc[-1], 'score': score, 's6_ret': stats6['Return [%]']}
+    except Exception:
+        return None
+
+def run_scanner(limit=None):
+    # 新增：包裹在一个大 try...except 中，用于生成友好的飞书消息
+    try:
+        all_stocks = ef.stock.get_realtime_quotes()
+        if all_stocks is None or len(all_stocks) == 0:
+            return "❌ 获取股票列表失败，可能由于 GitHub 海外 IP 被东方财富拦截。"
+
+        valid_stocks = all_stocks[all_stocks['股票代码'].str.match(r'^(60|00|30|68)')].copy()
+        valid_stocks.rename(columns={'股票代码': 'stock_code', '股票名称': 'stock_name'}, inplace=True)
+        if limit: valid_stocks = valid_stocks.head(limit)
+        
+        end_date = datetime.datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y%m%d")
+        results =[]
+        
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_to_stock = {executor.submit(process_stock, row, start_date, end_date): row['stock_code'] for _, row in valid_stocks.iterrows()}
+            for future in tqdm(as_completed(future_to_stock), total=len(valid_stocks)):
+                res = future.result()
+                if res and res['score'] >= 1: results.append(res)
+        
+        if not results:
+            return "✅ 扫描完成，但今日没有符合任何买入条件的股票。"
+
+        df_res = pd.DataFrame(results)
+        df_res.sort_values(by=['score', 's6_ret'], ascending=[False, False], inplace=True)
+        final_picks = df_res[df_res['score'] >= 2]
+        
+        # 将结果保存为 CSV 供下载
+        df_res.to_csv("A_Share_Scan_Result.csv", index=False, encoding='utf-8-sig')
+
+        # 构造人类可读的飞书消息
+        msg = f"✅ 全市场扫描完成！共发现 {len(final_picks)} 只综合优选股票 (满足>=2个策略)\n\n"
+        msg += "🏆 前 10 名股票列表 (按得分和收益率排序)：\n"
+        msg += df_res[['code', 'name', 'close', 'score', 's6_ret']].head(10).to_string(index=False)
+        return msg
+
+    except Exception as e:
+        error_info = str(e)
+        if "Max retries exceeded" in error_info or "Connection" in error_info:
+            return "❌ 扫描失败：网络连接被拒绝。原因通常是 GitHub 服务器的海外 IP 被东方财富反爬虫系统拦截。"
+        return f"❌ 扫描崩溃，发生未知错误：\n{error_info[:200]}"
+
+if __name__ == "__main__":
+    # 运行逻辑并把人类可读的结果写入文本文件
+    report_msg = run_scanner(limit=None)
+    with open("feishu_msg_1.txt", "w", encoding="utf-8") as f:
+        f.write(report_msg)
+    print("SAT_1Y.py 运行完毕，消息已写入 feishu_msg_1.txt")
