@@ -6,4 +6,3 @@ backtesting
 tqdm
 requests
 bokeh==2.4.3
-jq
