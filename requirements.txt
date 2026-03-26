@@ -1,7 +1,9 @@
 numpy<2.0.0
-pandas>=2.0.0,<3.0.0
+pandas<2.0.0
 efinance
 backtesting
 tqdm
 requests
 bokeh==2.4.3
+# 使用 git 链接代替普通的包名，直接从源码安装！这是解决报错的核心！
+pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@development
