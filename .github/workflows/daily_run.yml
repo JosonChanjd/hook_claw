@@ -16,28 +16,28 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: 设置 Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # 使用 3.10 是量化库最稳定的选择
-          cache: 'pip'
-
+          python-version: '3.10' # 强制回到最稳定的 3.10
+          # 注意：暂时关闭 cache 以确保干净的安装环境
+          
       - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 jq
 
-      - name: 安装 Python 依赖 (严格版本控制)
+      - name: 强制安装旧版核心库 (解决 Pandas 3.0 冲突)
         run: |
           python -m pip install --upgrade pip
-          # 1. 必须先安装旧版核心库，防止被后面带入 3.0 版本
-          pip install "numpy<2.0.0" "pandas<2.1.0" "bokeh==2.4.3"
-          # 2. 安装其他基础库
-          pip install efinance tqdm requests
-          # 3. 安装策略库（这些库对版本敏感）
-          pip install backtesting
-          # 4. 如果 PyPI 找不到 pandas-ta，尝试从官方源码安装
-          pip install pandas-ta || pip install git+https://github.com/twopirllc/pandas-ta.git
+          # 关键一步：先强制安装 1.x 版本的 numpy 和 pandas，防止被 3.0 污染
+          pip install "numpy<2.0.0" "pandas<2.1.0" "bokeh<3.0.0"
+          
+      - name: 安装量化策略库
+        run: |
+          # 此时安装 pandas-ta 就能找到兼容 1.x 版 pandas 的版本了
+          pip install pandas-ta
+          pip install efinance tqdm requests backtesting
 
       - name: 预创建文件夹
         run: |
@@ -70,8 +70,9 @@ jobs:
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
+          # 检查 Secret
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
-            echo "错误: 未配置 FEISHU_WEBHOOK Secret"
+            echo "错误: 未配置 FEISHU_WEBHOOK"
             exit 1
           fi
 
