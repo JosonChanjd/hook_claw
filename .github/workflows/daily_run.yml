@@ -13,28 +13,28 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 强制设置 Python 3.10
+      - name: 设置 Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          # 这里不使用 cache，确保每次都是干净的 3.10 环境
 
       - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 jq
 
-      - name: 强制安装旧版兼容依赖
+      - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
           
-          # 1. 强制安装旧版核心库，这是解决所有问题的关键
-          # 不要让系统自动选 3.0 版本，手动指定 1.5.3 和 1.26.4
-          pip install --only-binary=:all: "numpy==1.26.4" "pandas==1.5.3" "bokeh==2.4.3"
+          # 1. 先安装确定的核心版本，防止被自动升级到 3.0
+          pip install "numpy<2.0.0" "pandas<2.1.0" "bokeh<3.0.0"
           
-          # 2. 安装策略库和数据库
-          # 因为上面锁死了 pandas 1.5.3，这时候安装 pandas-ta 就会非常顺利
-          pip install pandas-ta efinance tqdm requests backtesting
+          # 2. 安装其他基础库
+          pip install efinance tqdm requests backtesting
+          
+          # 3. 【重点】直接从源码安装 pandas-ta，解决 PyPI 找不到包的问题
+          pip install https://github.com/twopirllc/pandas-ta/archive/master.zip
 
       - name: 预创建文件夹
         run: |
@@ -67,16 +67,15 @@ jobs:
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          # 检查 Secret
+          # 最后的防错检查：如果 Secret 为空，打印明确提示
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
-            echo "错误: 你没有在 GitHub Settings -> Secrets 中配置 FEISHU_WEBHOOK"
+            echo "::error::未发现 FEISHU_WEBHOOK！请在 GitHub Settings -> Secrets 中添加它。"
             exit 1
           fi
 
           TITLE="📊 每日量化策略扫描报告"
-          # 处理空变量，防止 curl 失败
-          R1="${RES1:-'脚本未产生摘要内容'}"
-          R2="${RES2:-'脚本未产生分析内容'}"
+          R1="${RES1:-'无扫描输出'}"
+          R2="${RES2:-'无分析输出'}"
 
           JSON_DATA=$(jq -n \
             --arg title "$TITLE" \
