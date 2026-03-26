@@ -13,27 +13,29 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 3.9
+      - name: 设置 Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # 3.9 是目前量化分析兼容性最好的版本
+          python-version: '3.10'
 
       - name: 安装系统依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 jq
+          sudo apt-get install -y libgl1 jq git
 
-      - name: 安装基础 Python 库
+      - name: 安装基础 Python 依赖
         run: |
           python -m pip install --upgrade pip
-          # 强制锁定旧版 pandas，防止被最新版 3.0 破坏
-          pip install "numpy<2.0.0" "pandas<2.0.0" "bokeh<3.0.0"
+          # 1. 强制安装旧版核心库，防止被最新 3.0 版本破坏
+          pip install "numpy<2.0.0" "pandas<2.0.0" "bokeh==2.4.3"
+          # 2. 安装其他必需库
           pip install efinance tqdm requests backtesting
 
-      - name: 强制安装 pandas-ta (从源码安装)
+      - name: 终极安装 pandas-ta (从 GitHub 源码直接拉取)
         run: |
-          # 既然 PyPI 找不到，我们直接从作者的 GitHub 仓库安装最新开发版
-          pip install git+https://github.com/twopirllc/pandas-ta.git@development
+          # 既然官方包名搜不到，我们直接用 git 协议安装作者的最新开发分支
+          # 这是绕过 "No matching distribution" 报错的唯一方法
+          pip install "pandas_ta @ git+https://github.com/twopirllc/pandas-ta.git@development"
 
       - name: 预创建文件夹
         run: |
@@ -41,45 +43,51 @@ jobs:
           mkdir -p combined_reports
 
       - name: 运行全市场扫描 (SAT_1Y.py)
+        id: step_scan
         run: |
-          # 运行脚本并将结果输出到日志
-          python SAT_1Y.py > scan.log 2>&1 || echo "脚本运行中..."
+          # 运行全市场扫描
+          python SAT_1Y.py > scan.log 2>&1 || echo "脚本执行中出现警告或非致命错误"
           tail -n 20 scan.log
           {
             echo "RES1<<EOF"
-            tail -n 15 scan.log
+            # 截取最后15行，如果文件不存在则输出提示
+            if [ -f scan.log ]; then tail -n 15 scan.log; else echo "scan.log 不存在"; fi
             echo "EOF"
           } >> "$GITHUB_ENV"
 
       - name: 运行单股分析 (SAT.py)
+        id: step_analyze
         run: |
-          python SAT.py > single.log 2>&1 || echo "脚本运行中..."
+          python SAT.py > single.log 2>&1 || echo "脚本执行中出现警告或非致命错误"
           tail -n 10 single.log
           {
             echo "RES2<<EOF"
-            tail -n 8 single.log
+            if [ -f single.log ]; then tail -n 8 single.log; else echo "single.log 不存在"; fi
             echo "EOF"
           } >> "$GITHUB_ENV"
 
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          # 检查 Secret 是否配置（你之前的报错显示 curl URL 为空）
+          # 1. 检查 Secret 变量
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
             echo "::error::未发现 FEISHU_WEBHOOK！请在 GitHub 仓库 Settings -> Secrets 中添加它。"
             exit 1
           fi
 
+          # 2. 处理多行文本，将其转换为 JSON 字符串
           TITLE="📊 每日量化策略扫描报告"
-          R1="${RES1:-'脚本未产生有效输出，请检查 scan.log'}"
-          R2="${RES2:-'单股分析未产生有效输出'}"
+          R1="${RES1:-'未获取到扫描摘要'}"
+          R2="${RES2:-'未获取到单股分析摘要'}"
 
+          # 3. 使用 jq 强制生成合法的 JSON
           JSON_DATA=$(jq -n \
             --arg title "$TITLE" \
             --arg r1 "$R1" \
             --arg r2 "$R2" \
             '{title: $title, result1: $r1, result2: $r2}')
 
+          # 4. 发送 Webhook
           curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
           -H 'Content-Type: application/json' \
           -d "$JSON_DATA"
@@ -91,5 +99,5 @@ jobs:
           name: Strategy-Reports
           path: |
             *.csv
-            Scan_Reports/*
-            combined_reports/*
+            Scan_Reports/
+            combined_reports/
