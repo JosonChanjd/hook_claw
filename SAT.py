@@ -315,7 +315,13 @@ def run_combined_system(symbol, start_date="20100101", end_date="20261231"):
     inject_combined_dashboard(report_path, symbol, stats_map, signals_map)
 
     print(f"\n✅ 完整综合报表已生成: {report_path}")
-    os.startfile(report_path)
+#    os.startfile(report_path)
+import os
+if os.name == 'nt': # 只有在 Windows 电脑上才自动打开文件
+    try:
+        os.startfile(report_path)
+    except:
+        pass
 
 if __name__ == "__main__":
     # 输入股票代码（例如 002195 二三四五）
