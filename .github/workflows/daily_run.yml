@@ -38,7 +38,7 @@ jobs:
           # 运行脚本，即使报错也不会中断后续步骤
           python SAT_1Y.py || true
           
-          # 直接读取 Python 生成的可读文本
+          # 注意：if 和 [ 之间必须有空格
           if[ -f "feishu_msg_1.txt" ]; then
             MSG1=$(cat feishu_msg_1.txt)
           else
@@ -54,7 +54,8 @@ jobs:
         run: |
           python SAT.py || true
           
-          if[ -f "feishu_msg_2.txt" ]; then
+          # 注意：if 和[ 之间必须有空格
+          if [ -f "feishu_msg_2.txt" ]; then
             MSG2=$(cat feishu_msg_2.txt)
           else
             MSG2="❌ 脚本 SAT.py 未能正常运行，未生成报告文本。"
@@ -67,6 +68,7 @@ jobs:
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
+          # 注意：if 和 [ 之间必须有空格
           if[ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
             echo "::error::未配置 FEISHU_WEBHOOK，请在 GitHub Settings 添加！"
             exit 1
