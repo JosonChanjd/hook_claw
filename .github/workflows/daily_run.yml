@@ -26,44 +26,60 @@ jobs:
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
-          # 因为 requirements.txt 已经改好了，这一步将无比顺畅！
           pip install -r requirements.txt
+          # 确保 bokeh 版本兼容，防止报 'js_on_event' 错误
+          pip install bokeh==2.4.3 
 
       - name: 预创建文件夹
         run: mkdir -p Scan_Reports combined_reports
 
       - name: 运行全市场扫描 (SAT_1Y.py)
         run: |
-          python SAT_1Y.py > scan.log 2>&1 || true
-          {
-            echo "RES1<<EOF"
-            tail -n 15 scan.log || echo "扫描日志无内容"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+          # 运行脚本，即使报错也不会中断后续步骤
+          python SAT_1Y.py || true
+          
+          # 直接读取 Python 生成的可读文本
+          if[ -f "feishu_msg_1.txt" ]; then
+            MSG1=$(cat feishu_msg_1.txt)
+          else
+            MSG1="❌ 脚本 SAT_1Y.py 未能正常运行，未生成报告文本。"
+          fi
+          
+          # 写入环境变量供后续使用
+          echo "RES1<<EOF" >> $GITHUB_ENV
+          echo "$MSG1" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: 运行单股分析 (SAT.py)
         run: |
-          python SAT.py > single.log 2>&1 || true
-          {
-            echo "RES2<<EOF"
-            tail -n 8 single.log || echo "分析日志无内容"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+          python SAT.py || true
+          
+          if[ -f "feishu_msg_2.txt" ]; then
+            MSG2=$(cat feishu_msg_2.txt)
+          else
+            MSG2="❌ 脚本 SAT.py 未能正常运行，未生成报告文本。"
+          fi
+          
+          echo "RES2<<EOF" >> $GITHUB_ENV
+          echo "$MSG2" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
+          if[ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
             echo "::error::未配置 FEISHU_WEBHOOK，请在 GitHub Settings 添加！"
             exit 1
           fi
 
+          # 使用 jq 安全地构建 JSON
           JSON_DATA=$(jq -n \
             --arg title "📊 每日量化策略扫描报告" \
-            --arg r1 "${RES1:-'无输出'}" \
-            --arg r2 "${RES2:-'无输出'}" \
+            --arg r1 "${RES1}" \
+            --arg r2 "${RES2}" \
             '{title: $title, result1: $r1, result2: $r2}')
 
+          # 发送给飞书
           curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
           -H 'Content-Type: application/json' \
           -d "$JSON_DATA"
