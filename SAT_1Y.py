@@ -308,4 +308,4 @@ def run_scanner(limit=None):
 
 if __name__ == "__main__":
     # limit=None 表示跑全市场。如果只想测试，可以填 limit=50
-    run_scanner(limit=None)
+    run_scanner(limit=10)
