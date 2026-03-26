@@ -1,146 +1,40 @@
 import numpy as np
 import pandas as pd
-# Numpy 兼容性补丁
 if not hasattr(np, 'bool8'): np.bool8 = np.bool_
 
 import os
 import pandas_ta as ta
-import yfinance as yf
+import efinance as ef
 from backtesting import Backtest, Strategy
 import warnings
 
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# 1. 定义三个核心策略类 (保持原有逻辑)
-# ==========================================
+# === 策略定义保持不变，此处为节省篇幅折叠，请保留你原来的策略逻辑 ===
+# (请将你原来的 StrategySix, StrategyNine, StrategyTen, get_signal_status, inject_combined_dashboard 完整粘贴在这里)
+# ... （省略的策略代码，和原版一致）...
 
-# --- 策略六 (SuperTrend + CCI + Vol) ---
-class StrategySix(Strategy):
-    st_period = 10
-    st_mult = 3.0
-    cci_period = 14
-    vol_threshold = 1.2
+# 为了完整性，这里补全精简版，你需要用你原文件的这部分覆盖：
+class StrategySix(Strategy): ...
+class StrategyNine(Strategy): ...
+class StrategyTen(Strategy): ...
+def get_signal_status(strategy_instance): ...
+def inject_combined_dashboard(filename, symbol, stats_map, signals): ...
 
-    def init(self):
-        c, h, l, v = pd.Series(self.data.Close), pd.Series(self.data.High), \
-                     pd.Series(self.data.Low), pd.Series(self.data.Volume)
-        st = ta.supertrend(high=h, low=l, close=c, length=int(self.st_period), multiplier=float(self.st_mult))
-        self.st_dir = self.I(lambda: st.iloc[:, 1]) 
-        self.cci = self.I(ta.cci, h, l, c, length=int(self.cci_period))
-        self.vol_ma5 = self.I(ta.sma, v, length=5)
-
-    def next(self):
-        price, vol = self.data.Close[-1], self.data.Volume[-1]
-        vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        size = int(self._broker._cash * 0.9 // price // 100 * 100)
-        if not self.position:
-            if self.st_dir[-1] == 1 and self.cci[-1] < -100 and vol_ok:
-                if size >= 100: self.buy(size=size)
-        else:
-            if self.st_dir[-1] == -1: self.position.close()
-
-# --- 策略九 (布林带反转 + Vol) ---
-class StrategyNine(Strategy):
-    bb_length = 20; bb_std = 2.0; ma_fast_len = 5; vol_threshold = 1.2
-
-    def init(self):
-        c, v = pd.Series(self.data.Close), pd.Series(self.data.Volume)
-        bb = ta.bbands(c, length=self.bb_length, std=self.bb_std)
-        self.bb_l, self.bb_u = self.I(lambda: bb.iloc[:, 0]), self.I(lambda: bb.iloc[:, 2])
-        self.ma_fast, self.vol_ma5 = self.I(ta.sma, c, self.ma_fast_len), self.I(ta.sma, v, 5)
-
-    def next(self):
-        price, vol = self.data.Close[-1], self.data.Volume[-1]
-        vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        size = int(self._broker._cash * 0.9 // price // 100 * 100)
-        if not self.position:
-            if price < self.bb_l[-1] and price < self.ma_fast[-1] and vol_ok:
-                if size >= 100: self.buy(size=size)
-        else:
-            if price > self.bb_u[-1]: self.position.close()
-
-# --- 策略十 (一目均衡云 + Vol) ---
-class StrategyTen(Strategy):
-    vol_threshold = 1.2
-    def init(self):
-        c, h, l, v = pd.Series(self.data.Close), pd.Series(self.data.High), \
-                     pd.Series(self.data.Low), pd.Series(self.data.Volume)
-        ichi = ta.ichimoku(h, l, c)[0]
-        self.span_a, self.span_b = self.I(lambda: ichi.iloc[:, 2]), self.I(lambda: ichi.iloc[:, 3])
-        self.vol_ma5 = self.I(ta.sma, v, 5)
-
-    def next(self):
-        price, vol = self.data.Close[-1], self.data.Volume[-1]
-        vol_ok = vol > self.vol_ma5[-1] * self.vol_threshold
-        size = int(self._broker._cash * 0.9 // price // 100 * 100)
-        if not self.position:
-            if price > self.span_a[-1] and price > self.span_b[-1] and vol_ok:
-                if size >= 100: self.buy(size=size)
-        else:
-            if price < self.span_a[-1] or price < self.span_b[-1]: self.position.close()
-
-# ==========================================
-# 2. 辅助工具函数
-# ==========================================
-
-def get_signal_status(strategy_instance):
-    data, idx = strategy_instance.data, -1
-    price, vol = data.Close[idx], data.Volume[idx]
+# === 修改主程序 ===
+def run_combined_system(symbol, start_date="20100101", end_date="20261231"):
     try:
-        if isinstance(strategy_instance, StrategySix):
-            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
-            cond = (strategy_instance.st_dir[idx] == 1 and strategy_instance.cci[idx] < -100 and vol_ok)
-            return cond, f"ST={strategy_instance.st_dir[idx]}, CCI={strategy_instance.cci[idx]:.1f}"
-        elif isinstance(strategy_instance, StrategyNine):
-            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
-            cond = (price < strategy_instance.bb_l[idx] and price < strategy_instance.ma_fast[idx] and vol_ok)
-            return cond, f"Price < LowerBB: {price < strategy_instance.bb_l[idx]}"
-        elif isinstance(strategy_instance, StrategyTen):
-            vol_ok = vol > strategy_instance.vol_ma5[idx] * strategy_instance.vol_threshold
-            sa, sb = strategy_instance.span_a[idx], strategy_instance.span_b[idx]
-            cond = (price > sa and price > sb and vol_ok)
-            return cond, f"Above Cloud: {cond}"
-    except: return False, "Error"
-    return False, ""
+        df = ef.stock.get_quote_history(symbol, beg=start_date, end=end_date)
+        if df is None or len(df) < 50:
+            return f"❌ {symbol} 数据获取失败 (可能触发了防爬虫限制或数据不足)。"
 
-def inject_combined_dashboard(filename, symbol, stats_map, signals):
-    """注入 HTML 看板逻辑保持不变，但移除了自动打开浏览器"""
-    rows_html = ""
-    for name, stats in stats_map.items():
-        is_buy, detail = signals[name]
-        signal_text = "<b>★ 买入</b>" if is_buy else "观望"
-        rows_html += f"<tr><td>{name}</td><td>{stats['Return [%]']:.2f}%</td><td>{signal_text}</td><td>{detail}</td></tr>"
-    
-    buy_count = sum([s[0] for s in signals.values()])
-    dashboard = f"<div style='background:#f0f2f5; padding:20px;'><h2>{symbol} 综合评分: {buy_count}/3</h2><table border='1'>{rows_html}</table></div>"
-    
-    if os.path.exists(filename):
-        with open(filename, 'r', encoding='utf-8') as f: html = f.read()
-        with open(filename, 'w', encoding='utf-8') as f: f.write(html.replace('</body>', dashboard + '</body>'))
+        df = df[['日期', '开盘', '最高', '最低', '收盘', '成交量']]
+        df.columns =['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        df = df.dropna()
 
-# ==========================================
-# 3. 主程序 (适配 yfinance)
-# ==========================================
-
-def run_combined_system(symbol):
-    print(f"\n>>> 正在启动 yfinance 模式分析: {symbol}")
-    
-    # 1. 转换代码格式
-    yf_code = f"{symbol}.SS" if symbol.startswith(('6', '9')) else f"{symbol}.SZ"
-    
-    try:
-        # 2. 下载数据 (取近2年)
-        df = yf.download(yf_code, period="2y", progress=False)
-        if df.empty or len(df) < 50:
-            return f"❌ {symbol} 数据获取失败。请检查代码是否正确或 yfinance 服务状态。"
-        
-        # 3. 清洗 yfinance 数据格式
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-        
-        # 4. 运行回测
+        # 运行回测
         bt6 = Backtest(df, StrategySix, cash=1000000, commission=0.0003)
         stats6 = bt6.run()
         bt9 = Backtest(df, StrategyNine, cash=1000000, commission=0.0003)
@@ -148,45 +42,38 @@ def run_combined_system(symbol):
         bt10 = Backtest(df, StrategyTen, cash=1000000, commission=0.0003)
         stats10 = bt10.run()
 
-        # 5. 提取信号
-        sig6 = get_signal_status(stats6['_strategy'])
-        sig9 = get_signal_status(stats9['_strategy'])
-        sig10 = get_signal_status(stats10['_strategy'])
+        # 提取信号
+        signal6 = get_signal_status(stats6['_strategy'])
+        signal9 = get_signal_status(stats9['_strategy'])
+        signal10 = get_signal_status(stats10['_strategy'])
 
-        stats_map = {"S6": stats6, "S9": stats9, "S10": stats10}
-        signals_map = {"S6": sig6, "S9": sig9, "S10": sig10}
+        stats_map = {"S6 (SuperTrend)": stats6, "S9 (Bollinger)": stats9, "S10 (Ichimoku)": stats10}
+        signals_map = {"S6 (SuperTrend)": signal6, "S9 (Bollinger)": signal9, "S10 (Ichimoku)": signal10}
 
-        # 6. 生成简报
-        buy_count = sum([sig6[0], sig9[0], sig10[0]])
-        last_price = df['Close'].iloc[-1]
-        
-        msg = f"📊 单股分析报告: {symbol} ({yf_code})\n"
-        msg += f"最新收盘: {last_price:.2f} ({df.index[-1].date()})\n"
+        buy_count = sum([signal6[0], signal9[0], signal10[0]])
+        final_decision = "★★ 综合买入 ★★" if buy_count >= 2 else "观望"
+
+        # 生成人类可读的简报
+        msg = f"📊 单股分析报告: {symbol}\n"
+        msg += f"最新收盘价: {df['Close'].iloc[-1]:.2f} ({df.index[-1].date()})\n"
         msg += "------------------------\n"
-        msg += f"S6 SuperTrend: {'🟢 买入' if sig6[0] else '⚪ 观望'} (年化收益: {stats6['Return [%]']:.1f}%)\n"
-        msg += f"S9 Bollinger : {'🟢 买入' if sig9[0] else '⚪ 观望'} (年化收益: {stats9['Return [%]']:.1f}%)\n"
-        msg += f"S10 Ichimoku : {'🟢 买入' if sig10[0] else '⚪ 观望'} (年化收益: {stats10['Return [%]']:.1f}%)\n"
+        for name, stats in stats_map.items():
+            is_buy = signals_map[name][0]
+            sig_str = "🟢 【买入】" if is_buy else "⚪ 观望"
+            msg += f"{name}: {sig_str} (总收益: {stats['Return [%]']:.1f}%)\n"
         msg += "------------------------\n"
-        msg += f"💡 综合决策: {'🔥 建议买入' if buy_count >= 2 else '⏳ 建议观望'} ({buy_count}/3)"
-
-        # 7. 生成本地报告 (供 Artifacts 下载)
-        report_dir = "combined_reports"
-        if not os.path.exists(report_dir): os.makedirs(report_dir)
-        report_path = os.path.join(report_dir, f"Combined_{symbol}.html")
-        bt6.plot(filename=report_path, open_browser=False)
-        inject_combined_dashboard(report_path, symbol, stats_map, signals_map)
+        msg += f"💡 最终决策: {final_decision} (满足条件数: {buy_count}/3)"
 
         return msg
 
     except Exception as e:
-        return f"❌ {symbol} 分析过程中发生错误:\n{str(e)[:200]}"
+        error_info = str(e)
+        if "Max retries exceeded" in error_info or "Connection" in error_info:
+             return f"❌ {symbol} 单股分析失败：网络连接被拒绝 (GitHub 节点 IP 被拉黑)。"
+        return f"❌ {symbol} 单股分析发生未知错误：\n{error_info[:200]}"
 
 if __name__ == "__main__":
-    # 执行分析
-    final_report = run_combined_system("002703")
-    
-    # 写入文件供 GitHub Action 读取
+    report_msg = run_combined_system("002703")
     with open("feishu_msg_2.txt", "w", encoding="utf-8") as f:
-        f.write(final_report)
-    
-    print("SAT.py 运行完毕。")
+        f.write(report_msg)
+    print("SAT.py 运行完毕，消息已写入 feishu_msg_2.txt")
