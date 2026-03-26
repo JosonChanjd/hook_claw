@@ -23,18 +23,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgl1 jq
 
-      - name: 安装 Python 依赖
+      - name: 安装 Python 基础依赖
         run: |
           python -m pip install --upgrade pip
-          
-          # 1. 先安装确定的核心版本，防止被自动升级到 3.0
+          # 先锁定最核心的版本
           pip install "numpy<2.0.0" "pandas<2.1.0" "bokeh<3.0.0"
-          
-          # 2. 安装其他基础库
           pip install efinance tqdm requests backtesting
-          
-          # 3. 【重点】直接从源码安装 pandas-ta，解决 PyPI 找不到包的问题
-          pip install https://github.com/twopirllc/pandas-ta/archive/master.zip
+
+      - name: 强制安装 pandas-ta (多方案尝试)
+        run: |
+          # 方案 A: 尝试下划线命名安装
+          pip install pandas_ta || \
+          # 方案 B: 尝试标准命名安装 (带忽略缓存)
+          pip install pandas-ta --no-cache-dir || \
+          # 方案 C: 直接从 GitHub 源码安装 (终极方案)
+          pip install https://github.com/twopirllc/pandas-ta/archive/refs/heads/master.zip
 
       - name: 预创建文件夹
         run: |
@@ -42,9 +45,7 @@ jobs:
           mkdir -p combined_reports
 
       - name: 运行全市场扫描 (SAT_1Y.py)
-        id: scan
         run: |
-          # 运行脚本
           python SAT_1Y.py > scan.log 2>&1 || echo "脚本运行中..."
           tail -n 20 scan.log
           {
@@ -54,7 +55,6 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: 运行单股分析 (SAT.py)
-        id: analyze
         run: |
           python SAT.py > single.log 2>&1 || echo "脚本运行中..."
           tail -n 10 single.log
@@ -67,7 +67,7 @@ jobs:
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          # 最后的防错检查：如果 Secret 为空，打印明确提示
+          # 检查 Secret 是否配置，没配置则报错
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
             echo "::error::未发现 FEISHU_WEBHOOK！请在 GitHub Settings -> Secrets 中添加它。"
             exit 1
