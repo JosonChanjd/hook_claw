@@ -6,7 +6,6 @@ on:
   workflow_dispatch: 
 
 env:
-  # 强制使用 Node 24 解决之前的警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
@@ -20,21 +19,24 @@ jobs:
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # 升级到 3.11 解决 pandas 兼容性问题
+          python-version: '3.11' 
           cache: 'pip'
 
       - name: 安装系统依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-glx jq
+          # Ubuntu 24.04 使用 libgl1 代替了 libgl1-mesa-glx
+          sudo apt-get install -y libgl1 jq
 
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
-          # 先安装核心库，再安装特定版本的 bokeh 以适配 backtesting
+          # 分开安装以确保兼容性
           pip install numpy pandas efinance tqdm requests
-          pip install pandas-ta 
-          pip install bokeh==2.4.3 
+          # 核心：使用正确的名称 pandas-ta
+          pip install pandas-ta
+          # 固定 bokeh 版本以适配 backtesting
+          pip install bokeh==2.4.3
           pip install backtesting
 
       - name: 预创建文件夹
@@ -46,39 +48,48 @@ jobs:
         id: scan
         run: |
           # 运行脚本
-          python SAT_1Y.py > scan.log 2>&1 || echo "脚本运行完成(含警告)"
-          # 打印部分日志到控制台
+          python SAT_1Y.py > scan.log 2>&1 || echo "脚本运行中产生了一些输出"
+          # 打印日志以便在 GitHub Actions 界面查看
           tail -n 20 scan.log
-          # 捕获结果给飞书变量
-          echo "RES1<<EOF" >> $GITHUB_ENV
-          tail -n 15 scan.log >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          # 捕获最后15行传给飞书
+          {
+            echo "RES1<<EOF"
+            tail -n 15 scan.log
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: 运行单股分析 (SAT.py)
         id: analyze
         run: |
-          python SAT.py > single.log 2>&1 || echo "脚本运行完成(含警告)"
+          python SAT.py > single.log 2>&1 || echo "脚本运行中产生了一些输出"
           tail -n 10 single.log
-          echo "RES2<<EOF" >> $GITHUB_ENV
-          tail -n 8 single.log >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          {
+            echo "RES2<<EOF"
+            tail -n 8 single.log
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: 构建 JSON 并发送飞书
         if: always()
         run: |
-          # 确保环境变量不为空，防止 curl 报错
-          TITLE="📊 每日量化策略扫描报告"
-          R1="${RES1:-'无扫描数据'}"
-          R2="${RES2:-'无单股分析数据'}"
+          # 检查 Secret 是否存在
+          if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
+            echo "错误: 未在 GitHub Secrets 中配置 FEISHU_WEBHOOK"
+            exit 1
+          fi
 
-          # 使用 jq 封装 JSON，防止特殊字符导致 curl 失败
+          # 处理空变量情况
+          TITLE="📊 每日量化策略扫描报告"
+          R1="${RES1:-'无扫描数据输出，请检查脚本内容'}"
+          R2="${RES2:-'无单股分析数据输出'}"
+
+          # 使用 jq 构建 JSON
           JSON_DATA=$(jq -n \
             --arg title "$TITLE" \
             --arg r1 "$R1" \
             --arg r2 "$R2" \
             '{title: $title, result1: $r1, result2: $r2}')
 
-          # 发送请求，请确保已在 Settings -> Secrets 中添加 FEISHU_WEBHOOK
           curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
           -H 'Content-Type: application/json' \
           -d "$JSON_DATA"
