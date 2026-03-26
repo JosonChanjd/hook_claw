@@ -13,53 +13,40 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 强制设置 Python 3.12
+      - name: 设置 Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12' # 严格匹配 pandas-ta 最新开发版的要求
+          python-version: '3.10'
 
       - name: 安装系统依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 jq git
+          sudo apt-get install -y libgl1 jq
 
-      - name: 终极防错安装 (彻底屏蔽官方仓库报错)
+      - name: 安装 Python 依赖
         run: |
-          # 1. 【核武器】直接删除你仓库里的 requirements.txt，防止它继续捣乱！
-          rm -f requirements.txt
-          
-          # 2. 升级 pip
           python -m pip install --upgrade pip
-          
-          # 3. 强制安装兼容 3.12 的核心库，锁定版本防止被 Pandas 3.0 破坏
-          pip install "numpy<2.0.0" "pandas>=2.0.0,<3.0.0" "bokeh==2.4.3"
-          
-          # 4. 安装普通依赖库
-          pip install efinance tqdm requests backtesting
-          
-          # 5. 【核心破解】绕过官方仓库，直接从 GitHub 源码强行拉取 pandas-ta
-          pip install git+https://github.com/twopirllc/pandas-ta.git
+          # 因为 requirements.txt 已经改好了，这一步将无比顺畅！
+          pip install -r requirements.txt
 
       - name: 预创建文件夹
         run: mkdir -p Scan_Reports combined_reports
 
       - name: 运行全市场扫描 (SAT_1Y.py)
         run: |
-          python SAT_1Y.py > scan.log 2>&1 || echo "脚本执行完毕(含输出)"
-          tail -n 20 scan.log
+          python SAT_1Y.py > scan.log 2>&1 || true
           {
             echo "RES1<<EOF"
-            if[ -f scan.log ]; then tail -n 15 scan.log; else echo "日志不存在"; fi
+            tail -n 15 scan.log || echo "扫描日志无内容"
             echo "EOF"
           } >> "$GITHUB_ENV"
 
       - name: 运行单股分析 (SAT.py)
         run: |
-          python SAT.py > single.log 2>&1 || echo "脚本执行完毕(含输出)"
-          tail -n 10 single.log
+          python SAT.py > single.log 2>&1 || true
           {
             echo "RES2<<EOF"
-            if [ -f single.log ]; then tail -n 8 single.log; else echo "日志不存在"; fi
+            tail -n 8 single.log || echo "分析日志无内容"
             echo "EOF"
           } >> "$GITHUB_ENV"
 
@@ -67,18 +54,14 @@ jobs:
         if: always()
         run: |
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
-            echo "::error::未配置 FEISHU_WEBHOOK！请在 GitHub Settings -> Secrets 中添加。"
+            echo "::error::未配置 FEISHU_WEBHOOK，请在 GitHub Settings 添加！"
             exit 1
           fi
 
-          TITLE="📊 每日量化策略扫描报告"
-          R1="${RES1:-'无扫描输出'}"
-          R2="${RES2:-'无分析输出'}"
-
           JSON_DATA=$(jq -n \
-            --arg title "$TITLE" \
-            --arg r1 "$R1" \
-            --arg r2 "$R2" \
+            --arg title "📊 每日量化策略扫描报告" \
+            --arg r1 "${RES1:-'无输出'}" \
+            --arg r2 "${RES2:-'无输出'}" \
             '{title: $title, result1: $r1, result2: $r2}')
 
           curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
