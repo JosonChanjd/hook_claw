@@ -1,8 +1,11 @@
-numpy
-pandas
-pandas_ta
+# 锁定旧版核心库，防止被 Pandas 3.0 破坏
+numpy<2.0.0
+pandas<2.1.0
+# 直接从 GitHub 源码安装 pandas-ta，解决官方仓库找不到包的问题
+pandas_ta @ git+https://github.com/twopirllc/pandas-ta.git@development
 efinance
 backtesting
 tqdm
 requests
+# backtesting 必须配合旧版 bokeh 才能绘图
 bokeh==2.4.3
