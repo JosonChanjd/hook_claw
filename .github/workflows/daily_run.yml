@@ -5,9 +5,6 @@ on:
     - cron: '0 8 * * *' # 北京时间 16:00
   workflow_dispatch: 
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   stock_job:
     runs-on: ubuntu-latest
@@ -16,28 +13,28 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 3.10
+      - name: 强制设置 Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # 强制回到最稳定的 3.10
-          # 注意：暂时关闭 cache 以确保干净的安装环境
-          
+          python-version: '3.10'
+          # 这里不使用 cache，确保每次都是干净的 3.10 环境
+
       - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 jq
 
-      - name: 强制安装旧版核心库 (解决 Pandas 3.0 冲突)
+      - name: 强制安装旧版兼容依赖
         run: |
           python -m pip install --upgrade pip
-          # 关键一步：先强制安装 1.x 版本的 numpy 和 pandas，防止被 3.0 污染
-          pip install "numpy<2.0.0" "pandas<2.1.0" "bokeh<3.0.0"
           
-      - name: 安装量化策略库
-        run: |
-          # 此时安装 pandas-ta 就能找到兼容 1.x 版 pandas 的版本了
-          pip install pandas-ta
-          pip install efinance tqdm requests backtesting
+          # 1. 强制安装旧版核心库，这是解决所有问题的关键
+          # 不要让系统自动选 3.0 版本，手动指定 1.5.3 和 1.26.4
+          pip install --only-binary=:all: "numpy==1.26.4" "pandas==1.5.3" "bokeh==2.4.3"
+          
+          # 2. 安装策略库和数据库
+          # 因为上面锁死了 pandas 1.5.3，这时候安装 pandas-ta 就会非常顺利
+          pip install pandas-ta efinance tqdm requests backtesting
 
       - name: 预创建文件夹
         run: |
@@ -72,13 +69,14 @@ jobs:
         run: |
           # 检查 Secret
           if [ -z "${{ secrets.FEISHU_WEBHOOK }}" ]; then
-            echo "错误: 未配置 FEISHU_WEBHOOK"
+            echo "错误: 你没有在 GitHub Settings -> Secrets 中配置 FEISHU_WEBHOOK"
             exit 1
           fi
 
           TITLE="📊 每日量化策略扫描报告"
-          R1="${RES1:-'无扫描输出，请检查日志'}"
-          R2="${RES2:-'无分析输出'}"
+          # 处理空变量，防止 curl 失败
+          R1="${RES1:-'脚本未产生摘要内容'}"
+          R2="${RES2:-'脚本未产生分析内容'}"
 
           JSON_DATA=$(jq -n \
             --arg title "$TITLE" \
