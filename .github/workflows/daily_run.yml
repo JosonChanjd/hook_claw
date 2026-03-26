@@ -1,0 +1,69 @@
+name: 每日股票自动策略
+
+on:
+  schedule:
+    - cron: '0 8 * * *' # 北京时间 16:00
+  workflow_dispatch: 
+
+jobs:
+  stock_job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install numpy pandas pandas_ta efinance backtesting tqdm requests bokeh==2.4.3
+
+      - name: 运行全市场扫描 (SAT_1Y.py)
+        id: scan
+        run: |
+          # 运行脚本并将输出保存
+          python SAT_1Y.py > scan.log 2>&1
+          # 提取最后 15 行作为摘要
+          SUMMARY1=$(tail -n 15 scan.log)
+          # 将结果存入环境变量
+          echo "RES1<<EOF" >> $GITHUB_ENV
+          echo "$SUMMARY1" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: 运行单股分析 (SAT.py)
+        id: analyze
+        run: |
+          python SAT.py > single.log 2>&1
+          SUMMARY2=$(tail -n 10 single.log)
+          echo "RES2<<EOF" >> $GITHUB_ENV
+          echo "$SUMMARY2" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: 构建 JSON 并发送飞书
+        if: always()
+        run: |
+          # 使用 jq 构建标准的 JSON 格式，自动处理换行和转义
+          JSON_DATA=$(jq -n \
+            --arg title "📊 每日量化策略扫描报告" \
+            --arg r1 "$RES1" \
+            --arg r2 "$RES2" \
+            '{title: $title, result1: $r1, result2: $r2}')
+
+          curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
+          -H 'Content-Type: application/json' \
+          -d "$JSON_DATA"
+
+      - name: 上传 HTML 报表
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stock-Reports
+          path: |
+            A_Share_Scan_Result.csv
+            Scan_Reports/
+            combined_reports/
