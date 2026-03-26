@@ -1,8 +1,9 @@
 numpy==1.26.4
 pandas==1.5.3
 pandas-ta @ git+https://github.com/MerlinR/Pandas-ta-fork.git
-efinance
+yfinance
 backtesting
 tqdm
 requests
 bokeh==2.4.3
+jq
